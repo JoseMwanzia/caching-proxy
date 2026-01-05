@@ -1,6 +1,7 @@
 import express, { Application, Request, Response } from "express";
 import Redis from "ioredis";
 import axios from "axios";
+import cors from "cors"
 import * as dotenv from "dotenv";
 dotenv.config();
 const { REDIS_URL } = process.env;
@@ -17,31 +18,45 @@ class Server {
   }
 
   startServer() {
-    this.app.get("/", this.handleRequest.bind(this));
+    this.app.use(cors())
+    this.app.use("/", this.handleRequest.bind(this));
 
     this.app.listen(this.port, () => {
       console.log(`Server lisetning on port ${this.port}`);
     });
   }
 
-  async handleRequest(req: Request, res: Response) {
+  async handleRequest(req: Request<{}, unknown, {}, {}>, res: Response) {
     const url = `${this.origin.replace(/\/+$/, "")}/${req.originalUrl.replace(
       /^\/+/,
       ""
     )}`;
-    const cachedResponse = await this.cache.get(url);
 
-    if (cachedResponse) {
-      res.setHeader("X-Cache", "HIT");
-      console.info("Retrieving from cache");
-      return res.status(200).send(JSON.parse(cachedResponse));
+    if (req.method === "GET") {
+      const cachedResponse = await this.cache.get(url);
+
+      if (cachedResponse) {
+        res.setHeader("X-Cache", "HIT");
+        console.info("Retrieving from cache");
+        return res.status(200).send(JSON.parse(cachedResponse));
+      }
     }
 
     try {
-      const response = await axios.get(this.origin);
+      const response = await axios({
+        method: req.method,
+        data: req.body,
+        url: url,
+        // headers: {...req.headers}
+      })
+      
       const responseData = response.data;
-      console.info(`Forwarding ${this.origin} to cache`);
-      this.cache.set(url, JSON.stringify(responseData), "EX", 300);
+
+      if (req.method === "GET") {
+        console.info(`Forwarding ${this.origin} to cache`);
+        await this.cache.set(url, JSON.stringify(responseData), "EX", 300);
+
+      }
 
       res.setHeader("X-Cache", "MISS");
       return res.status(200).send(responseData);
